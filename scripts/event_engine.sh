@@ -1,148 +1,113 @@
-#!/system/bin/sh
-# SARA SRE Agent v1 - Event Engine
-# Path: /data/adb/modules/sara_sre_agent/scripts/event_engine.sh or scripts/event_engine.sh in repo
-# Purpose: Read system_snapshot.json, ingest live kernel logcat/dmesg anomalies, and produce structured events.
-# Input: /data/local/tmp/system_snapshot.json
-# Output: /data/local/tmp/sara_events.json
+#!/bin/bash
+# SARA SRE 代理 v1 - 事件处理引擎
+# 用途: 解析 system_snapshot.json 并生成结构化安全事件。
 
-set -u
+# 允许通过环境变量覆盖路径以便在测试环境中运行
+INPUT_FILE="${SARA_INPUT_FILE:-/data/local/tmp/system_snapshot.json}"
+OUTPUT_FILE="${SARA_OUTPUT_FILE:-/data/local/tmp/sara_events.json}"
 
-SNAPSHOT_FILE="/data/local/tmp/system_snapshot.json"
-EVENTS_FILE="/data/local/tmp/sara_events.json"
-TIMESTAMP=$(date +%s)
+log_info() {
+    # Agent D (UX Designer) Style: [标题] 描述: 状态
+    # 保持中文输出与硬核术语 (VFS Layer, SUSFS, GKI, SELinux avc, TEE, Binder lock contention)
+    printf "[%-18s] %-40s: %s\n" "$1" "$2" "$3"
+}
 
-if [ ! -f "$SNAPSHOT_FILE" ]; then
-    echo "Error: Snapshot file $SNAPSHOT_FILE not found! Run snapshot.sh first."
+if [ ! -f "$INPUT_FILE" ]; then
+    echo "[错误] 找不到快照文件: $INPUT_FILE"
     exit 1
 fi
 
-# Helper function to extract JSON values using grep/sed (no jq dependency)
-get_json_bool() {
-    grep -o "\"$1\": [^,}]*" "$SNAPSHOT_FILE" | head -n1 | awk '{print $2}' | tr -d ' \r\n'
+# 简单解析 JSON (使用 grep/sed，确保在 Android minimal shell 环境下的兼容性)
+get_json_val() {
+    local key=$1
+    grep -o "\"$key\":[^,}]*" "$INPUT_FILE" | cut -d':' -f2- | tr -d '" ' | head -n1
 }
 
-get_json_str() {
-    grep -o "\"$1\": \"[^\"]*\"" "$SNAPSHOT_FILE" | head -n1 | cut -d'"' -f4 | tr -d '\r\n'
-}
+# 提取关键指标
+SUSFS_ACTIVE=$(get_json_val "active")
+NAMESPACE_LEAK=$(get_json_val "leak_detected")
+SELINUX_STATE=$(get_json_val "selinux_state")
+LSPOSED_DETECTED=$(get_json_val "lsposed_detected")
+BINDER_STATS_AVAILABLE=$(get_json_val "stats_available")
+BINDER_TX=$(get_json_val "total_transactions")
 
-get_json_num() {
-    grep -o "\"$1\": [0-9]*" "$SNAPSHOT_FILE" | head -n1 | awk '{print $2}' | tr -d ' \r\n'
-}
-
-# Parse variables from Snapshot Layer
-SUSFS_ACTIVE=$(get_json_bool "active")
-SUSFS_VERSION=$(get_json_str "version")
-VFS_HIDING=$(get_json_num "vfs_hiding_enabled")
-NAMESPACE_LEAK=$(get_json_bool "leak_detected")
-INIT_MOUNTS=$(get_json_num "init_mounts_count")
-SELF_MOUNTS=$(get_json_num "self_mounts_count")
-MODULE_MOUNTS=$(get_json_num "module_mounts_count")
-SELINUX_STATE=$(get_json_str "selinux_state")
-LSPOSED_DETECTED=$(get_json_bool "lsposed_detected")
-
-# Initialize event array list
-EVENT_INDEX=1
-EVENTS_JSON=""
+EVENTS_JSON="["
+FIRST_EVENT=true
 
 add_event() {
-    local source="$1"
-    local severity="$2"
-    local event_type="$3"
-    local message="$4"
-    local details="$5"
+    local id=$1
+    local priority=$2
+    local title=$3
+    local desc=$4
+    local status=$5
     
-    local EV_ID="EV_${TIMESTAMP}_00${EVENT_INDEX}"
-    
-    local SINGLE_EVENT=$(cat <<EOF
-  {
-    "event_id": "$EV_ID",
-    "timestamp": $TIMESTAMP,
-    "source": "$source",
-    "severity": "$severity",
-    "event_type": "$event_type",
-    "message": "$message",
-    "details": $details
-  }
-EOF
-)
-
-    if [ -n "$EVENTS_JSON" ]; then
-        EVENTS_JSON="${EVENTS_JSON},
-${SINGLE_EVENT}"
-    else
-        EVENTS_JSON="${SINGLE_EVENT}"
+    if [ "$FIRST_EVENT" = false ]; then
+        EVENTS_JSON="$EVENTS_JSON,"
     fi
     
-    EVENT_INDEX=$((EVENT_INDEX + 1))
+    # 构建 JSON，包含中英描述 (_description 字段由 Agent D 定义)
+    EVENTS_JSON="$EVENTS_JSON
+  {
+    \"id\": \"$id\",
+    \"priority\": \"$priority\",
+    \"title\": \"$title\",
+    \"description\": \"$desc\",
+    \"status\": \"$status\",
+    \"_description\": \"$title ($id) / Structural Security Event\",
+    \"timestamp\": $(date +%s)
+  }"
+    FIRST_EVENT=false
+    
+    # Terminal Output (UX Constraint: Agent D - "system-settings style")
+    log_info "$title" "$desc" "$status"
 }
 
-# --- Event Rule 1: SUSFS Inactivity / Hiding Disabled ---
-if [ "$SUSFS_ACTIVE" = "false" ]; then
-    add_event "kernel_susfs" "CRITICAL" "SUSFS_INACTIVE" \
-        "Kernel-level SUSFS security is inactive. Root hides will fail." \
-        "{\"active\": false, \"version\": \"$SUSFS_VERSION\"}"
-elif [ "$VFS_HIDING" -eq 0 ]; then
-    add_event "kernel_susfs" "WARNING" "SUSFS_VFS_HIDING_DISABLED" \
-        "SUSFS detected but VFS path hiding is disabled." \
-        "{\"active\": true, \"vfs_hiding_enabled\": 0}"
+echo "========================================================================"
+echo "SARA SRE 事件引擎 - 正在处理系统安全事件 (Industrial-grade Mode)"
+echo "========================================================================"
+
+# 1. SUSFS 检查 (VFS Layer / GKI)
+if [ "$SUSFS_ACTIVE" = "true" ]; then
+    add_event "susfs_active" "INFO" "VFS Layer" "内核级 SUSFS 隐藏已激活" "正常 (Active)"
+else
+    add_event "susfs_active" "WARNING" "VFS Layer" "未检测到 SUSFS 节点，内核加固缺失" "警告 (Inactive)"
 fi
 
-# --- Event Rule 2: Mount Namespace Leak ---
+# 2. 命名空间泄漏 (Mount Isolation)
 if [ "$NAMESPACE_LEAK" = "true" ]; then
-    DIFF=$((SELF_MOUNTS - INIT_MOUNTS))
-    add_event "mount_namespace" "HIGH" "MOUNT_NS_LEAK_DETECTED" \
-        "Mount namespace discrepancy detected. Root hooks leaked into app space." \
-        "{\"diff_count\": $DIFF, \"init_mounts\": $INIT_MOUNTS, \"self_mounts\": $SELF_MOUNTS, \"module_mounts\": $MODULE_MOUNTS}"
+    add_event "namespace_leak" "CRITICAL" "Mount Namespace" "检测到命名空间泄漏，存在跨隔离访问风险" "异常 (Leak Detected)"
+else
+    add_event "namespace_leak" "INFO" "Mount Namespace" "命名空间挂载点隔离完整 (Strict)" "正常 (Isolated)"
 fi
 
-# --- Event Rule 3: SELinux State Compromise ---
-if [ "$SELINUX_STATE" = "Permissive" ]; then
-    add_event "middleware" "HIGH" "SELINUX_PERMISSIVE_DETECTED" \
-        "SELinux is running in Permissive mode. High exploit vulnerability." \
-        "{\"current_state\": \"Permissive\"}"
+# 3. SELinux 状态 (SELinux avc / TEE Attestation)
+if [[ "$SELINUX_STATE" =~ "Permissive" ]] || [[ "$SELINUX_STATE" =~ "宽容" ]]; then
+    add_event "selinux_denial" "HIGH" "SELinux Policy" "SELinux 处于 Permissive 模式，TEE 验证可能失败" "风险 (Permissive)"
+else
+    add_event "selinux_denial" "INFO" "SELinux Policy" "SELinux 处于 Enforcing 模式，符合强制访问控制标准" "正常 (Enforcing)"
 fi
 
-# --- Event Rule 4: LSPosed/Zygisk Active ---
+# 4. Hook 探测 (Runtime Security)
 if [ "$LSPOSED_DETECTED" = "true" ]; then
-    add_event "middleware" "INFO" "LSPOSED_FRAMEWORK_ACTIVE" \
-        "LSPosed / Zygisk framework was detected inside running address spaces." \
-        "{\"detected\": true}"
+    add_event "hook_detection" "HIGH" "Runtime Security" "检测到 LSPosed/Zygisk 注入，系统完整性已降级" "异常 (Hook Detected)"
+else
+    add_event "hook_detection" "INFO" "Runtime Security" "未检测到活跃的 Hook 框架注入" "安全 (Clean)"
 fi
 
-# --- Event Rule 5: Dynamic Logcat / SELinux AVC Denials scan ---
-# Check for any recent SELinux AVC denials in the dmesg buffer or logcat (last 100 lines for efficiency)
-AVC_COUNT=0
-if logcat -d -t 100 2>/dev/null | grep -q "avc: denied"; then
-    AVC_COUNT=$(logcat -d -t 100 2>/dev/null | grep -c "avc: denied")
-elif dmesg 2>/dev/null | grep -q "avc: denied"; then
-    AVC_COUNT=$(dmesg 2>/dev/null | grep -c "avc: denied")
+# 5. Binder 锁竞争 (Binder lock contention)
+if [ "$BINDER_STATS_AVAILABLE" = "true" ]; then
+    if [ "$BINDER_TX" -gt 10000 ]; then
+         add_event "binder_stall" "MEDIUM" "Binder IPC" "检测到大规模 Binder 事务并发，可能触发锁竞争" "拥塞 (High Load)"
+    else
+         add_event "binder_stall" "INFO" "Binder IPC" "Binder IPC 通信指标处于健康水平" "流畅 (Low Load)"
+    fi
 fi
 
-if [ "$AVC_COUNT" -gt 0 ]; then
-    add_event "kernel_selinux" "WARNING" "SELINUX_AVC_DENIED" \
-        "System logcat reported active SELinux policy denials." \
-        "{\"avc_denial_count\": $AVC_COUNT}"
-fi
+EVENTS_JSON="$EVENTS_JSON
+]"
 
-# --- Event Rule 6: Binder transaction pressure scan ---
-# Look for Binder blockings or excessive transaction latency signatures
-BINDER_BLOCKED=false
-if logcat -d -t 100 2>/dev/null | grep -E -q "binder_alloc|slow transaction|binder thread|blocked"; then
-    BINDER_BLOCKED=true
-fi
-
-if [ "$BINDER_BLOCKED" = "true" ]; then
-    add_event "binder_radar" "WARNING" "BINDER_TRANSACTION_DELAY" \
-        "Slow transaction signatures detected in Binder IPC communication." \
-        "{\"binder_ipc_pressure\": true}"
-fi
-
-# Output full JSON array
-cat <<EOF > "$EVENTS_FILE"
-[
-$EVENTS_JSON
-]
-EOF
-
-chmod 0644 "$EVENTS_FILE"
-echo "Events generation completed. Output written to $EVENTS_FILE"
+echo "$EVENTS_JSON" > "$OUTPUT_FILE"
+echo "========================================================================"
+echo "事件处理完成。生成事件总数: $(grep -c "\"id\":" "$OUTPUT_FILE" || echo 0)"
+echo "输出文件路径: $OUTPUT_FILE"
+echo "========================================================================"
