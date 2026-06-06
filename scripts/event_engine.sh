@@ -8,7 +8,6 @@ OUTPUT_FILE="${SARA_OUTPUT_FILE:-/data/local/tmp/sara_events.json}"
 
 log_info() {
     # Agent D (UX Designer) Style: [标题] 描述: 状态
-    # 保持中文输出与硬核术语 (VFS Layer, SUSFS, GKI, SELinux avc, TEE, Binder lock contention)
     printf "[%-18s] %-40s: %s\n" "$1" "$2" "$3"
 }
 
@@ -17,9 +16,10 @@ if [ ! -f "$INPUT_FILE" ]; then
     exit 1
 fi
 
-# 简单解析 JSON (使用 grep/sed，确保在 Android minimal shell 环境下的兼容性)
+# 简单解析 JSON (使用 grep/sed，确保在 minimal shell 环境下的兼容性)
 get_json_val() {
     local key=$1
+    # 提取键值对的值部分
     grep -o "\"$key\":[^,}]*" "$INPUT_FILE" | cut -d':' -f2- | tr -d '" ' | head -n1
 }
 
@@ -45,7 +45,7 @@ add_event() {
         EVENTS_JSON="$EVENTS_JSON,"
     fi
     
-    # 构建 JSON，包含中英描述 (_description 字段由 Agent D 定义)
+    # 构建 JSON，包含中英描述
     EVENTS_JSON="$EVENTS_JSON
   {
     \"id\": \"$id\",
@@ -53,12 +53,12 @@ add_event() {
     \"title\": \"$title\",
     \"description\": \"$desc\",
     \"status\": \"$status\",
-    \"_description\": \"$title ($id) / Structural Security Event\",
+    \"_description\": \"$title ($id)\",
     \"timestamp\": $(date +%s)
   }"
     FIRST_EVENT=false
     
-    # Terminal Output (UX Constraint: Agent D - "system-settings style")
+    # Terminal Output (UX Constraint: Agent D)
     log_info "$title" "$desc" "$status"
 }
 
@@ -66,21 +66,21 @@ echo "========================================================================"
 echo "SARA SRE 事件引擎 - 正在处理系统安全事件 (Industrial-grade Mode)"
 echo "========================================================================"
 
-# 1. SUSFS 检查 (VFS Layer / GKI)
+# 1. SUSFS 检查 (VFS Layer)
 if [ "$SUSFS_ACTIVE" = "true" ]; then
     add_event "susfs_active" "INFO" "VFS Layer" "内核级 SUSFS 隐藏已激活" "正常 (Active)"
 else
     add_event "susfs_active" "WARNING" "VFS Layer" "未检测到 SUSFS 节点，内核加固缺失" "警告 (Inactive)"
 fi
 
-# 2. 命名空间泄漏 (Mount Isolation)
+# 2. 命名空间泄漏 (GKI / Mount Isolation)
 if [ "$NAMESPACE_LEAK" = "true" ]; then
     add_event "namespace_leak" "CRITICAL" "Mount Namespace" "检测到命名空间泄漏，存在跨隔离访问风险" "异常 (Leak Detected)"
 else
     add_event "namespace_leak" "INFO" "Mount Namespace" "命名空间挂载点隔离完整 (Strict)" "正常 (Isolated)"
 fi
 
-# 3. SELinux 状态 (SELinux avc / TEE Attestation)
+# 3. SELinux 状态 (avc / Enforcement)
 if [[ "$SELINUX_STATE" =~ "Permissive" ]] || [[ "$SELINUX_STATE" =~ "宽容" ]]; then
     add_event "selinux_denial" "HIGH" "SELinux Policy" "SELinux 处于 Permissive 模式，TEE 验证可能失败" "风险 (Permissive)"
 else
@@ -94,7 +94,7 @@ else
     add_event "hook_detection" "INFO" "Runtime Security" "未检测到活跃的 Hook 框架注入" "安全 (Clean)"
 fi
 
-# 5. Binder 锁竞争 (Binder lock contention)
+# 5. Binder 锁竞争 (Binder Stall)
 if [ "$BINDER_STATS_AVAILABLE" = "true" ]; then
     if [ "$BINDER_TX" -gt 10000 ]; then
          add_event "binder_stall" "MEDIUM" "Binder IPC" "检测到大规模 Binder 事务并发，可能触发锁竞争" "拥塞 (High Load)"
