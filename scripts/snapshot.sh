@@ -11,7 +11,7 @@ TIMESTAMP=$(date +%s)
 
 echo "[系统安全] 正在初始化系统审计环境..."
 
-# 1. 初始化 JSON 字段
+# 1. 初始化数据字段
 SUSFS_EXISTS=false
 SUSFS_VERSION="null"
 VFS_HIDING=0
@@ -22,7 +22,7 @@ INIT_MOUNTS_COUNT=0
 SELF_MOUNTS_COUNT=0
 MODULE_MOUNTS_COUNT=0
 
-SELINUX_STATE="未知"
+SELINUX_STATE="未知 (Unknown)"
 LSPOSED_DETECTED=false
 BINDER_STATS_AVAILABLE=false
 BINDER_TRANSACTION_COUNT=0
@@ -31,26 +31,17 @@ BINDER_TRANSACTION_COUNT=0
 echo "[系统安全] 正在检查内核级 SUSFS 状态..."
 if [ -d "/sys/kernel/susfs" ]; then
     SUSFS_EXISTS=true
-    if [ -f "/sys/kernel/susfs/susfs_version" ]; then
-        SUSFS_VERSION=$(cat /sys/kernel/susfs/susfs_version | tr -d '\r\n')
-    fi
-    if [ -f "/sys/kernel/susfs/vfs_hiding_enabled" ]; then
-        VFS_HIDING=$(cat /sys/kernel/susfs/vfs_hiding_enabled | tr -d '\r\n')
-    fi
-    if [ -f "/sys/kernel/susfs/sus_path_count" ]; then
-        SUSFS_SUS_PATH_COUNT=$(cat /sys/kernel/susfs/sus_path_count | tr -d '\r\n')
-    fi
-    echo "[系统安全] 内核支持 SUSFS (版本: $SUSFS_VERSION, VFS 隐藏: $VFS_HIDING)"
+    [ -f "/sys/kernel/susfs/susfs_version" ] && SUSFS_VERSION=$(cat /sys/kernel/susfs/susfs_version | tr -d '\r\n')
+    [ -f "/sys/kernel/susfs/vfs_hiding_enabled" ] && VFS_HIDING=$(cat /sys/kernel/susfs/vfs_hiding_enabled | tr -d '\r\n')
+    [ -f "/sys/kernel/susfs/sus_path_count" ] && SUSFS_SUS_PATH_COUNT=$(cat /sys/kernel/susfs/sus_path_count | tr -d '\r\n')
+    echo "[系统安全] 内核支持 SUSFS (版本: $SUSFS_VERSION, VFS 隐藏状态: $VFS_HIDING)"
 else
     echo "[系统安全] 未检测到内核级 SUSFS 支持"
 fi
 
 # 3. 分析挂载命名空间泄漏
 echo "[挂载命名空间] 正在分析挂载点隔离完整性..."
-# 对比 init 进程 (PID 1) 与当前 shell 命名空间的挂载点
-if [ -f "/proc/1/mounts" ]; then
-    INIT_MOUNTS_COUNT=$(wc -l < /proc/1/mounts)
-fi
+[ -f "/proc/1/mounts" ] && INIT_MOUNTS_COUNT=$(wc -l < /proc/1/mounts)
 if [ -f "/proc/self/mounts" ]; then
     SELF_MOUNTS_COUNT=$(wc -l < /proc/self/mounts)
     # 统计泄漏到当前命名空间的 Magisk/KernelSU 模块路径
@@ -61,27 +52,23 @@ fi
 DIFF=$((SELF_MOUNTS_COUNT - INIT_MOUNTS_COUNT))
 if [ "$DIFF" -gt 15 ] || [ "$MODULE_MOUNTS_COUNT" -gt 0 ]; then
     NAMESPACE_LEAK=true
-    echo "[挂载命名空间] 警报：检测到命名空间泄漏 (差异: $DIFF, 关联模块: $MODULE_MOUNTS_COUNT)"
+    echo "[挂载命名空间] 警报：检测到命名空间泄漏 (差异计数: $DIFF, 关联模块: $MODULE_MOUNTS_COUNT)"
 else
-    echo "[挂载命名空间] 命名空间隔离正常"
+    echo "[挂载命名空间] 命名空间隔离状态正常"
 fi
 
 # 4. 读取 SELinux 强制状态
 echo "[系统安全] 正在读取 SELinux 配置状态..."
 if [ -f "/sys/fs/selinux/enforce" ]; then
     SELINUX_VAL=$(cat /sys/fs/selinux/enforce)
-    if [ "$SELINUX_VAL" -eq 1 ]; then
-        SELINUX_STATE="强制 (Enforcing)"
-    else
-        SELINUX_STATE="宽容 (Permissive)"
-    fi
+    [ "$SELINUX_VAL" -eq 1 ] && SELINUX_STATE="强制 (Enforcing)" || SELINUX_STATE="宽容 (Permissive)"
 else
-    # 回退至 getenforce 命令
-    RAW_ENFORCE=$(getenforce 2>/dev/null)
+    # 回退方案：使用 getenforce 指令
+    RAW_ENFORCE=$(getenforce 2>/dev/null || echo "Unknown")
     case "$RAW_ENFORCE" in
         "Enforcing") SELINUX_STATE="强制 (Enforcing)" ;;
         "Permissive") SELINUX_STATE="宽容 (Permissive)" ;;
-        *) SELINUX_STATE="未知" ;;
+        *) SELINUX_STATE="未知 (Unknown)" ;;
     esac
 fi
 echo "[系统安全] SELinux 当前状态: $SELINUX_STATE"
@@ -101,7 +88,7 @@ if [ -f "/sys/kernel/debug/binder/stats" ]; then
     BINDER_STATS_AVAILABLE=true
     # 从 binder 调试统计中提取总事务计数
     BINDER_TRANSACTION_COUNT=$(grep -oE "BC_TRANSACTION:[0-9]+" /sys/kernel/debug/binder/stats | cut -d':' -f2 | awk '{s+=$1} END {print s}' || echo "0")
-    echo "[Binder 通信] 已捕获实时事务数据 (总计: $BINDER_TRANSACTION_COUNT)"
+    echo "[Binder 通信] 已捕获实时事务数据 (事务总计: $BINDER_TRANSACTION_COUNT)"
 else
     echo "[Binder 通信] 无法访问调试统计接口 (DebugFS 未挂载)"
 fi
@@ -109,21 +96,13 @@ fi
 # 7. 计算综合信任分数 (演绎法)
 echo "[快照状态] 正在计算系统信任度评估结果..."
 TRUST_SCORE=100
-if [ "$SUSFS_EXISTS" = "false" ]; then
-    TRUST_SCORE=$((TRUST_SCORE - 30))
-fi
-if [ "$NAMESPACE_LEAK" = "true" ]; then
-    TRUST_SCORE=$((TRUST_SCORE - 40))
-fi
-if [ "$SELINUX_STATE" = "宽容 (Permissive)" ]; then
-    TRUST_SCORE=$((TRUST_SCORE - 15))
-fi
-if [ "$TRUST_SCORE" -lt 0 ]; then
-    TRUST_SCORE=0
-fi
+[ "$SUSFS_EXISTS" = "false" ] && TRUST_SCORE=$((TRUST_SCORE - 30))
+[ "$NAMESPACE_LEAK" = "true" ] && TRUST_SCORE=$((TRUST_SCORE - 40))
+[ "$SELINUX_STATE" = "宽容 (Permissive)" ] && TRUST_SCORE=$((TRUST_SCORE - 15))
+[ "$TRUST_SCORE" -lt 0 ] && TRUST_SCORE=0
 echo "[快照状态] 系统信任评估得分: $TRUST_SCORE/100"
 
-# 8. 输出结构化 JSON
+# 8. 输出结构化 JSON (中英双语描述字段)
 cat <<EOF > "$OUTPUT_FILE"
 {
   "timestamp": $TIMESTAMP,
@@ -131,23 +110,28 @@ cat <<EOF > "$OUTPUT_FILE"
     "active": $SUSFS_EXISTS,
     "version": "$SUSFS_VERSION",
     "vfs_hiding_enabled": $VFS_HIDING,
-    "sus_path_count": $SUSFS_SUS_PATH_COUNT
+    "sus_path_count": $SUSFS_SUS_PATH_COUNT,
+    "_description": "内核级 SUSFS 状态 / Kernel-level SUSFS Status"
   },
   "mount_namespace": {
     "leak_detected": $NAMESPACE_LEAK,
     "init_mounts_count": $INIT_MOUNTS_COUNT,
     "self_mounts_count": $SELF_MOUNTS_COUNT,
-    "module_mounts_count": $MODULE_MOUNTS_COUNT
+    "module_mounts_count": $MODULE_MOUNTS_COUNT,
+    "_description": "挂载命名空间完整性 / Mount Namespace Integrity"
   },
   "middleware": {
     "selinux_state": "$SELINUX_STATE",
-    "lsposed_detected": $LSPOSED_DETECTED
+    "lsposed_detected": $LSPOSED_DETECTED,
+    "_description": "安全中间件状态 / Middleware Security Status"
   },
   "binder_radar": {
     "stats_available": $BINDER_STATS_AVAILABLE,
-    "total_transactions": ${BINDER_TRANSACTION_COUNT:-0}
+    "total_transactions": ${BINDER_TRANSACTION_COUNT:-0},
+    "_description": "Binder IPC 负载统计 / Binder IPC Stats"
   },
-  "overall_trust_score": $TRUST_SCORE
+  "overall_trust_score": $TRUST_SCORE,
+  "overall_trust_description": "系统综合信任评估得分 / System Trust Score"
 }
 EOF
 
