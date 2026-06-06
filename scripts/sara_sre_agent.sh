@@ -2,10 +2,6 @@
 # SARA SRE Phase 7: Central Orchestration & Execution Loop
 # Path: scripts/sara_sre_agent.sh
 # Description: Central entry point for SARA SRE Agent running the full diagnostic loop.
-# Agent D (UX Designer) - Chinese Logs & Style
-# Agent A (Builder) - Production-grade Daemon Logic
-# Agent B (Reviewer) - GKI/HyperOS Compatibility Verified
-# Agent C (Tester) - Execution Logic Validated
 
 set -u
 
@@ -69,8 +65,7 @@ run_cycle() {
     log_info "规则评估" "执行确定性安全规则匹配 (scripts/rule_engine.sh)" "运行中"
     sh "$BIN_DIR/rule_engine.sh" >> "$LOG_FILE" 2>&1 || log_error "规则评估" "规则评估失败" "错误"
     
-    # Phase 4: AI Interpretation
-    log_info "AI 解读" "执行专家级根因分析 RCA (scripts/ai_interpretation.sh)" "运行中"
+    # Phase 4: AI 解读" "执行专家级根因分析 RCA (scripts/ai_interpretation.sh)" "运行中"
     sh "$BIN_DIR/ai_interpretation.sh" >> "$LOG_FILE" 2>&1 || log_error "AI 解读" "AI 诊断失败" "错误"
     
     # Phase 5: Trust Map
