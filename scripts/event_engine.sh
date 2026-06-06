@@ -1,29 +1,22 @@
-#!/bin/bash
-# SARA SRE 代理 v1 - 事件处理引擎
-# 用途: 解析 system_snapshot.json 并生成结构化安全事件。
-
-# 允许通过环境变量覆盖路径以便在测试环境中运行
+#!/system/bin/sh
+# SARA SRE Agent - Event Engine (Refactored for KernelSU)
+set -u
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INPUT_FILE="${SARA_INPUT_FILE:-/data/local/tmp/system_snapshot.json}"
 OUTPUT_FILE="${SARA_OUTPUT_FILE:-/data/local/tmp/sara_events.json}"
 
-log_info() {
-    # Agent D (UX Designer) Style: [标题] 描述: 状态
-    printf "[%-18s] %-40s: %s\n" "$1" "$2" "$3"
-}
+log_info() { printf "[%-18s] %-40s: %s\n" "$1" "$2" "$3"; }
 
 if [ ! -f "$INPUT_FILE" ]; then
     echo "[错误] 找不到快照文件: $INPUT_FILE"
     exit 1
 fi
 
-# 简单解析 JSON (使用 grep/sed，确保在 minimal shell 环境下的兼容性)
 get_json_val() {
     local key=$1
-    # 提取键值对的值部分
     grep -o "\"$key\":[^,}]*" "$INPUT_FILE" | cut -d':' -f2- | tr -d '" ' | head -n1
 }
 
-# 提取关键指标
 SUSFS_ACTIVE=$(get_json_val "active")
 NAMESPACE_LEAK=$(get_json_val "leak_detected")
 SELINUX_STATE=$(get_json_val "selinux_state")
@@ -35,17 +28,8 @@ EVENTS_JSON="["
 FIRST_EVENT=true
 
 add_event() {
-    local id=$1
-    local priority=$2
-    local title=$3
-    local desc=$4
-    local status=$5
-    
-    if [ "$FIRST_EVENT" = false ]; then
-        EVENTS_JSON="$EVENTS_JSON,"
-    fi
-    
-    # 构建 JSON，包含中英描述
+    local id=$1 priority=$2 title=$3 desc=$4 status=$5
+    [ "$FIRST_EVENT" = false ] && EVENTS_JSON="$EVENTS_JSON,"
     EVENTS_JSON="$EVENTS_JSON
   {
     \"id\": \"$id\",
@@ -53,61 +37,49 @@ add_event() {
     \"title\": \"$title\",
     \"description\": \"$desc\",
     \"status\": \"$status\",
-    \"_description\": \"$title ($id)\",
     \"timestamp\": $(date +%s)
   }"
     FIRST_EVENT=false
-    
-    # Terminal Output (UX Constraint: Agent D)
     log_info "$title" "$desc" "$status"
 }
 
 echo "========================================================================"
-echo "SARA SRE 事件引擎 - 正在处理系统安全事件 (Industrial-grade Mode)"
+echo "SARA SRE 事件引擎 - 正在处理系统安全事件"
 echo "========================================================================"
 
-# 1. SUSFS 检查 (VFS Layer)
 if [ "$SUSFS_ACTIVE" = "true" ]; then
     add_event "susfs_active" "INFO" "VFS Layer" "内核级 SUSFS 隐藏已激活" "正常 (Active)"
 else
     add_event "susfs_active" "WARNING" "VFS Layer" "未检测到 SUSFS 节点，内核加固缺失" "警告 (Inactive)"
 fi
 
-# 2. 命名空间泄漏 (GKI / Mount Isolation)
 if [ "$NAMESPACE_LEAK" = "true" ]; then
-    add_event "namespace_leak" "CRITICAL" "Mount Namespace" "检测到命名空间泄漏，存在跨隔离访问风险" "异常 (Leak Detected)"
+    add_event "namespace_leak" "CRITICAL" "Mount Namespace" "检测到命名空间泄漏" "异常 (Leak Detected)"
 else
-    add_event "namespace_leak" "INFO" "Mount Namespace" "命名空间挂载点隔离完整 (Strict)" "正常 (Isolated)"
+    add_event "namespace_leak" "INFO" "Mount Namespace" "命名空间挂载点隔离完整" "正常 (Isolated)"
 fi
 
-# 3. SELinux 状态 (avc / Enforcement)
-if [[ "$SELINUX_STATE" =~ "Permissive" ]] || [[ "$SELINUX_STATE" =~ "宽容" ]]; then
-    add_event "selinux_denial" "HIGH" "SELinux Policy" "SELinux 处于 Permissive 模式，TEE 验证可能失败" "风险 (Permissive)"
+if [[ "$SELINUX_STATE" =~ "Permissive" ]]; then
+    add_event "selinux_denial" "HIGH" "SELinux Policy" "SELinux 处于 Permissive 模式" "风险 (Permissive)"
 else
-    add_event "selinux_denial" "INFO" "SELinux Policy" "SELinux 处于 Enforcing 模式，符合强制访问控制标准" "正常 (Enforcing)"
+    add_event "selinux_denial" "INFO" "SELinux Policy" "SELinux 处于 Enforcing 模式" "正常 (Enforcing)"
 fi
 
-# 4. Hook 探测 (Runtime Security)
 if [ "$LSPOSED_DETECTED" = "true" ]; then
-    add_event "hook_detection" "HIGH" "Runtime Security" "检测到 LSPosed/Zygisk 注入，系统完整性已降级" "异常 (Hook Detected)"
+    add_event "hook_detection" "HIGH" "Runtime Security" "检测到 LSPosed/Zygisk 注入" "异常 (Hook Detected)"
 else
     add_event "hook_detection" "INFO" "Runtime Security" "未检测到活跃的 Hook 框架注入" "安全 (Clean)"
 fi
 
-# 5. Binder 锁竞争 (Binder Stall)
 if [ "$BINDER_STATS_AVAILABLE" = "true" ]; then
-    if [ "$BINDER_TX" -gt 10000 ]; then
-         add_event "binder_stall" "MEDIUM" "Binder IPC" "检测到大规模 Binder 事务并发，可能触发锁竞争" "拥塞 (High Load)"
+    if [ "${BINDER_TX:-0}" -gt 10000 ]; then
+         add_event "binder_stall" "MEDIUM" "Binder IPC" "检测到大规模 Binder 事务并发" "拥塞"
     else
-         add_event "binder_stall" "INFO" "Binder IPC" "Binder IPC 通信指标处于健康水平" "流畅 (Low Load)"
+         add_event "binder_stall" "INFO" "Binder IPC" "Binder IPC 通信指标处于健康水平" "流畅"
     fi
 fi
 
 EVENTS_JSON="$EVENTS_JSON
 ]"
-
 echo "$EVENTS_JSON" > "$OUTPUT_FILE"
-echo "========================================================================"
-echo "事件处理完成。生成事件总数: $(grep -c "\"id\":" "$OUTPUT_FILE" || echo 0)"
-echo "输出文件路径: $OUTPUT_FILE"
 echo "========================================================================"

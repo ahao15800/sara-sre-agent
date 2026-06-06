@@ -1,0 +1,6 @@
+id=sara_sre_agent
+name=SARA SRE Agent (ReSukiSU Edition)
+version=v1.0.0
+versionCode=100
+author=ahao15800 & SARA Team
+description=工业级 SRE 安全运维代理，支持 HyperOS / GKI 内核安全态势感知。
