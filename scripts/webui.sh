@@ -14,30 +14,38 @@ AI_JSON="/data/local/tmp/sara_ai_interpretation.json"
 TRUST_MAP_SVG="/data/local/tmp/sara_trust_map.svg"
 
 # 日志输出函数 - Agent D 规范
-log_info() { echo -e "\033[32m[INFO]\033[0m $1"; }
-log_warn() { echo -e "\033[33m[WARN]\033[0m $1"; }
-log_error() { echo -e "\033[31m[ERROR]\033[0m $1"; }
+log_info() { echo -e "\033[32m[信息]\033[0m $1"; }
+log_warn() { echo -e "\033[33m[警告]\033[0m $1"; }
+log_error() { echo -e "\033[31m[错误]\033[0m $1"; }
 
 # 确保目录存在
 mkdir -p /data/local/tmp
 
-# 数据校验与缺省值处理 (硬核防御编程)
+# 数据校验 (严格集成模式: 仅在缺失时报警，不生成 Mock 数据)
 check_data() {
     if [[ ! -f "$1" ]]; then
-        log_warn "数据源 $1 缺失，正在生成模拟凭据..."
-        echo "$2" > "$1"
+        log_warn "数据源 $1 缺失，等待采集循环注入..."
+        return 1
     fi
+    return 0
 }
 
-check_data "$EVENT_JSON" '{"events":[{"time":"2026-06-06 12:00:00","level":"CRITICAL","msg":"检测到非法 GKI 修改"}]}'
-check_data "$RULES_JSON" '{"risk_level":"HIGH","rules":[{"name":"GKI","status":"CRITICAL"}]}'
-check_data "$AI_JSON" '{"analysis":"系统完整性受到威胁","recommendation":"强制执行 SUSFS 防护"}'
-check_data "$TRUST_MAP_SVG" '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="40" fill="none" stroke="#FF3B30" stroke-width="5" /></svg>'
+# 预检
+check_data "$EVENT_JSON" || EVENT_JSON_VAL='{"events":[]}'
+check_data "$RULES_JSON" || RULES_JSON_VAL='{"risk_assessment":{"score":100,"level":"UNKNOWN"}}'
+check_data "$AI_JSON" || AI_JSON_VAL='{"diagnostic_report":{"root_cause_analysis":"等待采集循环...","remediation_advice":"--"}}'
+check_data "$TRUST_MAP_SVG" || TRUST_MAP_SVG_VAL='<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><text x="10" y="50" fill="red">Waiting for data...</text></svg>'
+
+# 读取实时数据
+[ -f "$EVENT_JSON" ] && EVENT_JSON_VAL=$(cat "$EVENT_JSON")
+[ -f "$RULES_JSON" ] && RULES_JSON_VAL=$(cat "$RULES_JSON")
+[ -f "$AI_JSON" ] && AI_JSON_VAL=$(cat "$AI_JSON")
+[ -f "$TRUST_MAP_SVG" ] && TRUST_MAP_SVG_VAL=$(cat "$TRUST_MAP_SVG")
 
 # --- [ 核心 HTML 生成 / Core HTML Generation ] ---
 log_info "正在注入 HyperOS 工业级视觉引擎 (Dark Industrial Theme)..."
 
-cat << 'EOF' > "$WEBUI_PATH"
+cat << EOF > "$WEBUI_PATH"
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -99,7 +107,7 @@ cat << 'EOF' > "$WEBUI_PATH"
 
         .svg-container {
             width: 100%;
-            height: 200px;
+            height: auto;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -108,7 +116,7 @@ cat << 'EOF' > "$WEBUI_PATH"
             overflow: hidden;
             margin-top: 10px;
         }
-        .svg-container svg { width: 80%; height: auto; }
+        .svg-container svg { width: 100%; height: auto; }
 
         .btn {
             background-color: var(--accent-color);
@@ -156,14 +164,14 @@ cat << 'EOF' > "$WEBUI_PATH"
 
     <div class="card">
         <div class="setting-title">信任拓扑图 (Trust Map)</div>
-        <div class="setting-desc">实时动态生成的系统信任链路</div>
+        <div class="setting-desc">由 Phase 5 引擎生成的实时系统信任链路</div>
         <div class="svg-container" id="trust-map-box">
-            <!-- SVG_INJECTION_MARKER -->
+            $TRUST_MAP_SVG_VAL
         </div>
     </div>
 
     <div class="card">
-        <div class="setting-title">因果 AI 诊断</div>
+        <div class="setting-title">因果 AI 诊断 (RCA)</div>
         <div id="ai-analysis" class="setting-desc" style="color: var(--text-primary); margin-top:8px; font-weight: 500;"></div>
         <div id="ai-rec" class="setting-desc" style="color: var(--status-warn); margin-top:4px;"></div>
     </div>
@@ -176,40 +184,37 @@ cat << 'EOF' > "$WEBUI_PATH"
     </div>
 
     <script>
-        const eventsData = JSON_EVENTS_PLACEHOLDER;
-        const risksData = JSON_RISKS_PLACEHOLDER;
-        const aiData = JSON_AI_PLACEHOLDER;
+        const eventsData = $EVENT_JSON_VAL;
+        const risksData = $RULES_JSON_VAL;
+        const aiData = $AI_JSON_VAL;
 
         function renderUI() {
             // 事件渲染
-            const evCount = eventsData.events ? eventsData.events.length : 0;
-            document.getElementById('event-summary').innerText = `检测到 ${evCount} 个事件`;
+            const evCount = eventsData ? eventsData.length : 0;
+            document.getElementById('event-summary').innerText = \`检测到 \${evCount} 个事件\`;
             document.getElementById('event-summary').className = 'setting-status ' + (evCount > 0 ? 'status-high' : 'status-low');
             
             let evHtml = '';
-            (eventsData.events || []).slice(0, 3).forEach(e => {
-                evHtml += `<div style="margin-bottom:4px;">[${e.level}] ${e.msg}</div>`;
+            (eventsData || []).slice(0, 3).forEach(e => {
+                evHtml += \`<div style="margin-bottom:4px;">[\${e.priority}] \${e.title}: \${e.description}</div>\`;
             });
             document.getElementById('event-list').innerHTML = evHtml;
 
             // 风险渲染
-            document.getElementById('risk-status').innerText = risksData.risk_level || "UNKNOWN";
+            const ra = risksData.risk_assessment || {};
+            document.getElementById('risk-status').innerText = ra.level || "UNKNOWN";
             document.getElementById('risk-status').className = 'setting-status ' + 
-                (risksData.risk_level === 'HIGH' || risksData.risk_level === 'CRITICAL' ? 'status-high' : 'status-med');
+                (ra.score < 40 ? 'status-high' : (ra.score < 70 ? 'status-med' : 'status-low'));
 
             // AI 渲染
-            document.getElementById('ai-analysis').innerText = aiData.analysis || "等待诊断...";
-            document.getElementById('ai-rec').innerText = "决策建议: " + (aiData.recommendation || "继续观察");
+            const dr = aiData.diagnostic_report || {};
+            document.getElementById('ai-analysis').innerText = dr.root_cause_analysis || "等待诊断...";
+            document.getElementById('ai-rec').innerText = "决策建议: " + (dr.remediation_advice || "继续观察");
 
             // KSU 桥接探测
             if (window.ksu) {
                 document.getElementById('ksu-status').innerText = "KernelSU 已连接 (SU 权限就绪)";
                 document.getElementById('ksu-status').style.color = "var(--status-ok)";
-                window.ksu.getVersion().then(v => {
-                    document.getElementById('ksu-info').innerText = "Bridge Version: KSU-" + v;
-                }).catch(() => {
-                    document.getElementById('ksu-info').innerText = "Bridge Connection: ACTIVE";
-                });
             } else {
                 document.getElementById('ksu-status').innerText = "标准浏览器环境 (KSU 未注入)";
             }
@@ -229,37 +234,3 @@ cat << 'EOF' > "$WEBUI_PATH"
     </script>
 </body>
 </html>
-EOF
-
-# --- [ 数据静态注入 / Static Data Injection ] ---
-log_info "执行工业级数据注入流..."
-EVENTS_VAL=$(cat "$EVENT_JSON")
-RISKS_VAL=$(cat "$RULES_JSON")
-AI_VAL=$(cat "$AI_JSON")
-SVG_VAL=$(cat "$TRUST_MAP_SVG")
-
-# 使用 python 进行安全替换，避免 sed 对特殊字符（如引号、斜杠）的处理问题
-python3 -c "
-import os
-path = '$WEBUI_PATH'
-with open(path, 'r', encoding='utf-8') as f:
-    content = f.read()
-
-content = content.replace('JSON_EVENTS_PLACEHOLDER', '''$EVENTS_VAL''')
-content = content.replace('JSON_RISKS_PLACEHOLDER', '''$RISKS_VAL''')
-content = content.replace('JSON_AI_PLACEHOLDER', '''$AI_VAL''')
-content = content.replace('<!-- SVG_INJECTION_MARKER -->', '''$SVG_VAL''')
-
-with open(path, 'w', encoding='utf-8') as f:
-    f.write(content)
-"
-
-log_info "WebUI 静态资源构建完成: $WEBUI_PATH"
-
-# --- [ 服务器启动逻辑 / Server Launch ] ---
-if [[ "$1" == "--serve" ]]; then
-    log_info "正在启动 SARA 控制台 Web 服务器..."
-    log_warn "本地开发地址: http://localhost:8080/sara_webui.html"
-    cd /data/local/tmp
-    python3 -m http.server 8080
-fi
