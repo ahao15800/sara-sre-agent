@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SARA SRE Agent - 全链路可信诊断</title>
+    <style>
+        :root {
+            --bg-dark: #0a0a0c;
+            --panel-dark: #141417;
+            --accent-green: #00ff9d;
+            --accent-red: #ff4d4d;
+            --text-main: #e0e0e0;
+            --text-dim: #888;
+        }
+        body {
+            background: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .header {
+            width: 100%;
+            max-width: 1000px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            letter-spacing: 2px;
+            color: var(--accent-green);
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            width: 100%;
+            max-width: 1000px;
+        }
+        .card {
+            background: var(--panel-dark);
+            border: 1px solid #222;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        .card h3 {
+            margin-top: 0;
+            font-size: 1rem;
+            color: var(--text-dim);
+            border-left: 3px solid var(--accent-green);
+            padding-left: 10px;
+        }
+        .status-val {
+            font-family: 'Courier New', monospace;
+            font-size: 1.2rem;
+            margin: 10px 0;
+        }
+        .status-ok { color: var(--accent-green); }
+        .status-error { color: var(--accent-red); }
+
+        .topology-container {
+            width: 100%;
+            max-width: 1000px;
+            margin-top: 30px;
+            background: var(--panel-dark);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        svg {
+            width: 100%;
+            height: auto;
+            max-width: 600px;
+        }
+        .console {
+            width: 100%;
+            max-width: 1000px;
+            height: 150px;
+            background: #000;
+            color: #0f0;
+            font-family: monospace;
+            padding: 10px;
+            margin-top: 20px;
+            overflow-y: auto;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            border: 1px solid #333;
+        }
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+        }
+        button {
+            background: transparent;
+            border: 1px solid var(--accent-green);
+            color: var(--accent-green);
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: var(--accent-green);
+            color: #000;
+        }
+        .btn-leak {
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+        }
+        .btn-leak:hover {
+            background: var(--accent-red);
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>SARA SRE SYSTEM <small style="font-size: 0.6rem; color: #555;">v2.4.0-STABLE</small></h1>
+        <div id="trust-badge" style="color: var(--accent-green);">TRUST SCORE: 100</div>
+    </div>
+
+    <div class="dashboard">
+        <div class="card">
+            <h3>内核级可信底座 (VFS & SUSFS)</h3>
+            <div class="status-val status-ok" id="susfs-status">SUSFS v1.5.2 ACTIVE</div>
+            <div style="font-size: 0.8rem; color: #666;">Hooks: vfs_read, vfs_write, openat2</div>
+        </div>
+        <div class="card">
+            <h3>命名空间与挂载隔离 (Namespace)</h3>
+            <div class="status-val status-ok" id="ns-status">ISOLATED</div>
+            <div style="font-size: 0.8rem; color: #666;">Mount Consistency: 100% Match</div>
+        </div>
+        <div class="card">
+            <h3>IPC 进程通信负载 (Binder Radar)</h3>
+            <div class="status-val status-ok" id="binder-status">LATENCY: 0.42ms</div>
+            <div style="font-size: 0.8rem; color: #666;">Transactions: 1.2k/sec</div>
+        </div>
+    </div>
+
+    <div class="topology-container">
+        <h3 style="margin-bottom: 20px;">全链路可信拓扑图 (Trust Map)</h3>
+        <svg viewBox="0 0 400 120">
+            <!-- Nodes -->
+            <circle cx="50" cy="60" r="20" fill="none" stroke="currentColor" id="node-kernel" class="status-ok" stroke-width="2"/>
+            <text x="50" y="95" text-anchor="middle" fill="#888" font-size="10">GKI Kernel</text>
+            
+            <line x1="70" y1="60" x2="130" y2="60" stroke="#333" stroke-width="2" id="line-1"/>
+            
+            <circle cx="150" cy="60" r="20" fill="none" stroke="currentColor" id="node-zygote" class="status-ok" stroke-width="2"/>
+            <text x="150" y="95" text-anchor="middle" fill="#888" font-size="10">Zygote</text>
+            
+            <line x1="170" y1="60" x2="230" y2="60" stroke="#333" stroke-width="2" id="line-2"/>
+            
+            <circle cx="250" cy="60" r="20" fill="none" stroke="currentColor" id="node-lsp" class="status-ok" stroke-width="2"/>
+            <text x="250" y="95" text-anchor="middle" fill="#888" font-size="10">LSPosed</text>
+            
+            <line x1="270" y1="60" x2="330" y2="60" stroke="#333" stroke-width="2" id="line-3"/>
+            
+            <circle cx="350" cy="60" r="20" fill="none" stroke="currentColor" id="node-app" class="status-ok" stroke-width="2"/>
+            <text x="350" y="95" text-anchor="middle" fill="#888" font-size="10">App Process</text>
+        </svg>
+    </div>
+
+    <div class="console" id="terminal">
+        [SYSTEM] SRE Agent Initialized...<br>
+        [SYSTEM] Loading core_detect.sh hooks...<br>
+        [SYSTEM] Ready for diagnostic.
+    </div>
+
+    <div class="controls">
+        <button onclick="runHeuristic()">一键自愈修复</button>
+        <button class="btn-leak" onclick="toggleLeak()">故障仿真注入</button>
+    </div>
+
+    <script>
+        const term = document.getElementById('terminal');
+        let isLeaking = false;
+
+        function log(msg, type='info') {
+            const time = new Date().toLocaleTimeString();
+            let color = '#0f0';
+            if(type === 'warn') color = '#ff0';
+            if(type === 'error') color = '#f00';
+            term.innerHTML += `<span style="color: ${color}">[${time}] ${msg}</span><br>`;
+            term.scrollTop = term.scrollHeight;
+        }
+
+        function runHeuristic() {
+            log('Starting Heuristic Repair Flow...');
+            setTimeout(() => log('Scanning transient logs in /data/log...'), 500);
+            setTimeout(() => log('Clearing buffer cache and tombstone bloat...'), 1200);
+            setTimeout(() => {
+                log('Verifying Mount Integrity...', 'warn');
+                document.getElementById('ns-status').className = 'status-val status-ok';
+                document.getElementById('ns-status').innerText = 'ISOLATED';
+                resetTopology();
+                log('System Restored to High Trust State.', 'info');
+                document.getElementById('trust-badge').innerText = 'TRUST SCORE: 100';
+                document.getElementById('trust-badge').style.color = 'var(--accent-green)';
+            }, 2500);
+        }
+
+        function toggleLeak() {
+            isLeaking = !isLeaking;
+            if(isLeaking) {
+                log('INJECTING FAULT: Mount Namespace Leak Simulated', 'error');
+                document.getElementById('ns-status').innerText = 'LEAK DETECTED';
+                document.getElementById('ns-status').className = 'status-val status-error';
+                document.getElementById('trust-badge').innerText = 'TRUST SCORE: 45';
+                document.getElementById('trust-badge').style.color = 'var(--accent-red)';
+                
+                // Update Topology to Red
+                document.getElementById('node-zygote').setAttribute('class', 'status-error');
+                document.getElementById('node-app').setAttribute('class', 'status-error');
+                document.getElementById('line-2').style.stroke = 'var(--accent-red)';
+                document.getElementById('line-3').style.stroke = 'var(--accent-red)';
+                
+                log('CRITICAL: Zygote namespace structure compromised.', 'error');
+                log('Recommendation: Remount /data/adb/modules with MS_SLAVE.', 'warn');
+            } else {
+                log('Fault injection cleared.');
+                runHeuristic();
+            }
+        }
+
+        function resetTopology() {
+            const nodes = ['node-kernel', 'node-zygote', 'node-lsp', 'node-app'];
+            nodes.forEach(id => document.getElementById(id).setAttribute('class', 'status-ok'));
+            document.getElementById('line-1').style.stroke = '#333';
+            document.getElementById('line-2').style.stroke = '#333';
+            document.getElementById('line-3').style.stroke = '#333';
+        }
+    </script>
+</body>
+</html>
