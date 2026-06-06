@@ -1,53 +1,42 @@
 #!/bin/bash
-# SARA SRE Phase 5: Trust Map Engine (Trust Topology Visualizer)
-# Author: SARA-SRE-AI-ENGINE
+# SARA SRE Phase 5: Trust Map Engine (Strict Integration)
 # Path: scripts/trust_map.sh
-# Version: 1.2.1-PROD
 
 log_info() {
     printf "[%-18s] %-40s: %s\n" "$1" "$2" "$3"
 }
 
-# Path Configuration
 SNAPSHOT_FILE="/data/local/tmp/system_snapshot.json"
 EVENTS_FILE="/data/local/tmp/sara_events.json"
-RULES_FILE="/data/local/tmp/sara_rules_assessment.json"
-AI_FILE="/data/local/tmp/sara_ai_interpretation.json"
 OUTPUT_SVG="/data/local/tmp/sara_trust_map.svg"
 OUTPUT_JSON="/data/local/tmp/sara_trust_map.json"
 
 echo "========================================================================"
-echo "SARA SRE 信任拓扑引擎 - 正在生成全链路动态信任图谱 (Strict CI Mode)"
+echo "SARA SRE 信任拓扑引擎 - 正在生成动态信任图谱 (Production Mode)"
 echo "========================================================================"
 
-mkdir -p /data/local/tmp/
-
-# Data check and fallback to live probing
-if [ ! -f "$SNAPSHOT_FILE" ]; then
-    log_info "数据预检" "Snapshot 缺失，执行内核实时状态探测" "进行中"
-    echo "{\"kernel\":{\"susfs\":\"enabled\"},\"selinux\":\"enforcing\"}" > "$SNAPSHOT_FILE"
+if [ ! -f "$SNAPSHOT_FILE" ] || [ ! -f "$EVENTS_FILE" ]; then
+    echo "[错误] 缺失前置快照或事件数据，无法构建信任图。"
+    exit 1
 fi
 
-# Shell-based SVG Generator (Robust for environments without Python)
-# 1. Extract states using grep/sed (Dynamic parsing)
+# 状态提取 (基于真实上游数据)
 VFS_STATUS="healthy"
-[ -f "$SNAPSHOT_FILE" ] && grep -q "\"susfs\":\"enabled\"" "$SNAPSHOT_FILE" || VFS_STATUS="risk"
+grep -q "\"active\":true" "$SNAPSHOT_FILE" || VFS_STATUS="risk"
 
 NS_STATUS="healthy"
-[ -f "$EVENTS_FILE" ] && grep -q "namespace_leak" "$EVENTS_FILE" && NS_STATUS="breached"
+grep -q "namespace_leak" "$EVENTS_FILE" && NS_STATUS="breached"
 
 SEL_STATUS="healthy"
-if [ -f "$SNAPSHOT_FILE" ]; then
-    grep -q "\"selinux\":\"permissive\"" "$SNAPSHOT_FILE" && SEL_STATUS="breached"
-fi
+grep -q "SELinux Policy" "$EVENTS_FILE" && SEL_STATUS="breached"
 
 ZYGOTE_STATUS="healthy"
-[ -f "$EVENTS_FILE" ] && grep -q "hook_detection" "$EVENTS_FILE" && ZYGOTE_STATUS="breached"
+grep -q "hook_detection" "$EVENTS_FILE" && ZYGOTE_STATUS="breached"
 
 BINDER_STATUS="healthy"
-[ -f "$EVENTS_FILE" ] && grep -q "binder_stall" "$EVENTS_FILE" && BINDER_STATUS="risk"
+grep -q "binder_stall" "$EVENTS_FILE" && BINDER_STATUS="risk"
 
-# 2. Color Mapping
+# 颜色映射
 GET_COLOR() {
     case $1 in
         "healthy") echo "#52C41A" ;;
@@ -63,15 +52,11 @@ SEL_COLOR=$(GET_COLOR $SEL_STATUS)
 ZYGOTE_COLOR=$(GET_COLOR $ZYGOTE_STATUS)
 BINDER_COLOR=$(GET_COLOR $BINDER_STATUS)
 
-# 3. Generate SVG
-log_info "信任图引擎" "开始构建 SVG 矢量图形" "运行中"
-
+# 生成 SVG
 cat <<SVG_EOF > "$OUTPUT_SVG"
 <svg width="800" height="500" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
     <rect width="100%" height="100%" fill="#141414" rx="12"/>
     <text x="30" y="50" fill="#FFFFFF" font-family="monospace" font-size="24" font-weight="bold">SARA TRUST MAP v1.2</text>
-    
-    <!-- Nodes -->
     <g transform="translate(100, 200)">
         <rect width="160" height="80" rx="8" fill="$VFS_COLOR" fill-opacity="0.1" stroke="$VFS_COLOR" stroke-width="3"/>
         <text x="80" y="45" fill="white" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">VFS (SUSFS)</text>
@@ -84,37 +69,19 @@ cat <<SVG_EOF > "$OUTPUT_SVG"
         <rect width="160" height="80" rx="8" fill="$SEL_COLOR" fill-opacity="0.1" stroke="$SEL_COLOR" stroke-width="3"/>
         <text x="80" y="45" fill="white" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">SELinux</text>
     </g>
-    <g transform="translate(250, 350)">
-        <rect width="160" height="80" rx="8" fill="$ZYGOTE_COLOR" fill-opacity="0.1" stroke="$ZYGOTE_COLOR" stroke-width="3"/>
-        <text x="80" y="45" fill="white" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Zygote/Hooks</text>
-    </g>
-    <g transform="translate(550, 350)">
-        <rect width="160" height="80" rx="8" fill="$BINDER_COLOR" fill-opacity="0.1" stroke="$BINDER_COLOR" stroke-width="3"/>
-        <text x="80" y="45" fill="white" font-family="sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Binder Radar</text>
-    </g>
 </svg>
 SVG_EOF
 
-# 4. Generate JSON Metadata
 cat <<JSON_EOF > "$OUTPUT_JSON"
 {
   "timestamp": $(date +%s),
   "node_states": {
     "vfs": "$VFS_STATUS",
     "namespace": "$NS_STATUS",
-    "selinux": "$SEL_STATUS",
-    "zygote": "$ZYGOTE_STATUS",
-    "binder": "$BINDER_STATUS"
-  },
-  "ux_config": {
-    "_description_cn": "动态信任图谱生成完毕",
-    "_description_en": "Dynamic trust map generated successfully"
+    "selinux": "$SEL_STATUS"
   }
 }
 JSON_EOF
 
 log_info "拓扑可视化" "SVG 信任链地图构建" "成功 (PASS)"
-log_info "UX 配置" "元数据导出" "成功 (PASS)"
-echo "========================================================================"
-echo "SARA SRE 信任图层 - 拓扑分析流水线执行完毕"
 echo "========================================================================"
